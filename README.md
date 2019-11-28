@@ -1,5 +1,5 @@
 # aws-s3-copy-large
-Copy large AWS S3 objects (more than 5 GB) from one container to another
+Copy large AWS S3 objects (more than 5 GB) from one bucket to another
 
 Because AWS has limitations to copy large objects (more than 5G) from one bucket to anothier,
 this core decides this issue using multipart upload on a fly.
