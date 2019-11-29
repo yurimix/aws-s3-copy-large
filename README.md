@@ -18,5 +18,4 @@ s3copy.copyObject(sourceBucket, sourceObject, destinationBucket, destinationObje
 
 ```
 
-You can get, copy, modify the code as you wish but without any warranties from my side.
 
