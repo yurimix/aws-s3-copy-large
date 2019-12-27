@@ -12,16 +12,35 @@ module.exports = {
 };
 
 function copyObject(sourceBucket, sourceObject, destinationBucket, destinationObject) {
-    return headObject(sourceBucket, sourceObject).then(head => {
-        if (head.ContentLength >= MAX_FILE_LENGTH ) {
-            return copyMultipartObject(sourceBucket, sourceObject, destinationBucket, destinationObject, head);
+    return getObjectAttributes(sourceBucket, sourceObject).then(attrs => {
+        var copyPromise;
+        if (attrs.ContentLength >= MAX_FILE_LENGTH ) {
+            copyPromise = copyMultipartObject(sourceBucket, sourceObject, destinationBucket, destinationObject, attrs);
         } else {
-            return copyFullObject(sourceBucket, sourceObject, destinationBucket, destinationObject);
+            copyPromise = copyFullObject(sourceBucket, sourceObject, destinationBucket, destinationObject);
         }
+        return copyPromise.then(copyRes => {
+            return updateGrants(destinationBucket, destinationObject, attrs).then(res => {
+                return copyRes;
+            });
+        });
     });
 }
 
-function headObject(bucket, object) {
+function updateGrants(bucket, object, attrs) {
+    let params = {
+        Bucket: bucket,
+        Key: object,
+        AccessControlPolicy: {
+            Owner: attrs.Owner,
+            Grants: attrs.Grants
+        }
+    };
+    console.log(JSON.stringify(params));
+    return s3.putObjectAcl(params).promise();
+}
+
+function getObjectAttributes(bucket, object) {
     let params = {
         Bucket: bucket,
         Key: object
@@ -29,12 +48,15 @@ function headObject(bucket, object) {
     
     return Promise.all([
         s3.getObjectTagging(params).promise(),
-        s3.headObject(params).promise()
+        s3.headObject(params).promise(),
+        s3.getObjectAcl(params).promise()
     ]).then(res => {
         return {
             TagSet: res[0].TagSet,
             ContentLength: res[1].ContentLength,
-            Metadata: res[1].Metadata
+            Metadata: res[1].Metadata,
+            Grants: res[2].Grants,
+            Owner: res[2].Owner
         };
     });    
 }
@@ -53,22 +75,22 @@ function copyFullObject(sourceBucket, sourceObject, destinationBucket, destinati
     });
 }
 
-function copyMultipartObject(sourceBucket, sourceObject, destinationBucket, destinationObject, head) {
+function copyMultipartObject(sourceBucket, sourceObject, destinationBucket, destinationObject, attrs) {
 
     let multipartParams = {
         Bucket: destinationBucket,
         Key: destinationObject,
-        Metadata: head.Metadata
+        Metadata: attrs.Metadata
     };
 
-    if (head.TagSet) {
-        multipartParams.Tagging = head.TagSet.map(tag => encodeURIComponent(tag.Key) + '=' + encodeURIComponent(tag.Value)).join('&');
+    if (attrs.TagSet) {
+        multipartParams.Tagging = attrs.TagSet.map(tag => encodeURIComponent(tag.Key) + '=' + encodeURIComponent(tag.Value)).join('&');
     }
     
     console.log('Multipart params', multipartParams);
 
     let multipartMap = { Parts: [] };
-    let contentLength = head.ContentLength;
+    let contentLength = attrs.ContentLength;
     return s3.createMultipartUpload(multipartParams).promise().then(multipart => {
         let partNum = 0;
         let partsNum = Math.ceil(contentLength / PART_SIZE);
@@ -107,16 +129,14 @@ function copyMultipartPart(sourceBucket, sourceObject, destinationBucket, destin
         PartNumber: String(partNum),
         UploadId: uploadId
     };
-    console.log('Copying part', partParams);
+    console.log(`Copying part #${partNum}`, partParams);
     let time = Date.now();
     return s3.uploadPartCopy(partParams).promise().then(data => {
         multipartMap.Parts[partNum - 1] = {
             ETag: data.ETag,
             PartNumber: Number(partNum)
         };
-        console.log(`Part copied in ${Date.now() - time}ms.`);
+        console.log(`Part #${partNum} copied in ${Date.now() - time}ms.`);
         return;
     });
-
 }
-
